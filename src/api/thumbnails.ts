@@ -4,31 +4,7 @@ import { getVideo, updateVideo } from "../db/videos";
 import type { ApiConfig } from "../config";
 import type { BunRequest } from "bun";
 import { BadRequestError, NotFoundError, UserForbiddenError } from "./errors";
-
-
-export async function handlerGetThumbnail(cfg: ApiConfig, req: BunRequest) {
-  const { videoId } = req.params as { videoId?: string };
-  if (!videoId) {
-    throw new BadRequestError("Invalid video ID");
-  }
-
-  const video = getVideo(cfg.db, videoId);
-  if (!video) {
-    throw new NotFoundError("Couldn't find video");
-  }
-
-  const thumbnail = videoThumbnails.get(videoId);
-  if (!thumbnail) {
-    throw new NotFoundError("Thumbnail not found");
-  }
-
-  return new Response(thumbnail.data, {
-    headers: {
-      "Content-Type": thumbnail.mediaType,
-      "Cache-Control": "no-store",
-    },
-  });
-}
+import path from "path";
 
 export async function handlerUploadThumbnail(cfg: ApiConfig, req: BunRequest) {
   const { videoId } = req.params as { videoId?: string };
@@ -62,12 +38,17 @@ export async function handlerUploadThumbnail(cfg: ApiConfig, req: BunRequest) {
   }
 
   const mediaType = file.type;
+  if (mediaType !== "image/jpeg" && mediaType !== "image/png") {
+      throw new BadRequestError("Invalid image type (must be jpeg or png");
+  }
+  const partsMediaType = mediaType.split("/");
+  const fileExtension = partsMediaType[1];
   const bufferArray  = await file.arrayBuffer();
   const buffer = Buffer.from(bufferArray);
-  const buffer64 = buffer.toString("base64");
-
-  const dataURL = `data:${mediaType};base64,${buffer64}`;
-  video.thumbnailURL = dataURL;
+  const filePath = path.join(cfg.assetsRoot, `${videoId}.${fileExtension}`);
+  const thumbnailURL = `http://localhost:${cfg.port}/assets/${videoId}.${fileExtension}`;
+  await Bun.write(filePath, buffer);
+  video.thumbnailURL = thumbnailURL;
   updateVideo(cfg.db, video);
 
   return respondWithJSON(200, video);
