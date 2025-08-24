@@ -2,11 +2,12 @@ import { respondWithJSON } from "./json";
 import { BadRequestError, NotFoundError, UserForbiddenError } from "./errors";
 import { getBearerToken, validateJWT } from "../auth";
 import { type ApiConfig } from "../config";
-import { getVideo, updateVideo } from "../db/videos";
+import { getVideo, updateVideo, type Video } from "../db/videos";
 import type { BunRequest } from "bun";
 import { randomBytes } from "crypto";
 import path from "path";
 import { rm } from "fs/promises";
+import { generatePresignedURL } from "./s3";
 
 export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
   const MAX_UPLOAD_SIZE = 1 << 30;
@@ -65,7 +66,7 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
     await rm(filePath, { force: true });
     await rm(`${filePath}.processed.mp4`, { force: true })
   }
-  video.videoURL = videoURL;
+  video.videoURL = `${aspectRatio}/${key}`;
   updateVideo(cfg.db, video);
 
   return respondWithJSON(200, null);
@@ -143,4 +144,14 @@ export async function processVideoForFastStart(inputFilePath: string) {
   }
 
   return processedFilePath;
+}
+
+export async function dbVideoToSignedVideo(cfg: ApiConfig, video: Video) {
+  if (!video.videoURL) {
+    return video;
+  }
+
+  video.videoURL = await generatePresignedURL(cfg, video.videoURL, 5 * 60);
+
+  return video;
 }
