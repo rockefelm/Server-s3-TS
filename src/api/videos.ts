@@ -7,7 +7,6 @@ import type { BunRequest } from "bun";
 import { randomBytes } from "crypto";
 import path from "path";
 import { rm } from "fs/promises";
-import { generatePresignedURL } from "./s3";
 
 export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
   const MAX_UPLOAD_SIZE = 1 << 30;
@@ -52,7 +51,7 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
   await Bun.write(filePath, buffer);
   const aspectRatio = await getVideoAspectRatio(filePath);
   const processedFilePath = await processVideoForFastStart(filePath);
-  const videoURL = `https://${cfg.s3Bucket}.s3.${cfg.s3Region}.amazonaws.com/${aspectRatio}/${key}`;
+  const videoURL = `https://${cfg.s3CfDistribution}/${aspectRatio}/${key}`;
   const s3File = cfg.s3Client.file(`${aspectRatio}/${key}` , {
     bucket: cfg.s3Bucket
   });
@@ -66,7 +65,7 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
     await rm(filePath, { force: true });
     await rm(`${filePath}.processed.mp4`, { force: true })
   }
-  video.videoURL = `${aspectRatio}/${key}`;
+  video.videoURL = videoURL;
   updateVideo(cfg.db, video);
 
   return respondWithJSON(200, null);
@@ -144,14 +143,4 @@ export async function processVideoForFastStart(inputFilePath: string) {
   }
 
   return processedFilePath;
-}
-
-export async function dbVideoToSignedVideo(cfg: ApiConfig, video: Video) {
-  if (!video.videoURL) {
-    return video;
-  }
-
-  video.videoURL = await generatePresignedURL(cfg, video.videoURL, 5 * 60);
-
-  return video;
 }
