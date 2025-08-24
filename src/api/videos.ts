@@ -47,14 +47,15 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
   const bufferArray  = await file.arrayBuffer();
   const buffer = Buffer.from(bufferArray);
   const key = `${randomBytes(32).toString("hex")}.${fileExtension}`;
-  
   const filePath = path.join("/tmp", key);
-  const videoURL = `https://${cfg.s3Bucket}.s3.${cfg.s3Region}.amazonaws.com/${key}`;
   await Bun.write(filePath, buffer);
-  const s3File = cfg.s3Client.file(key, {
+  const aspectRatio = await getVideoAspectRatio(filePath);
+  const processedFilePath = await processVideoForFastStart(filePath);
+  const videoURL = `https://${cfg.s3Bucket}.s3.${cfg.s3Region}.amazonaws.com/${aspectRatio}/${key}`;
+  const s3File = cfg.s3Client.file(`${aspectRatio}/${key}` , {
     bucket: cfg.s3Bucket
   });
-  const fileContents = Bun.file(filePath);
+  const fileContents = Bun.file(processedFilePath);
 
   try {
     await s3File.write(fileContents, {
@@ -62,9 +63,84 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
     });
   } finally {
     await rm(filePath, { force: true });
+    await rm(`${filePath}.processed.mp4`, { force: true })
   }
   video.videoURL = videoURL;
   updateVideo(cfg.db, video);
 
   return respondWithJSON(200, null);
+}
+
+export async function getVideoAspectRatio(filePath: string) {
+  const process = Bun.spawn(
+    [
+      "ffprobe",
+      "-v",
+      "error",
+      "-select_streams",
+      "v:0",
+      "-show_entries",
+      "stream=width,height",
+      "-of",
+      "json",
+      filePath,
+    ],
+    {
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+
+  const outputText = await new Response(process.stdout).text();
+  const errorText = await new Response(process.stderr).text();
+
+  const exitCode = await process.exited;
+
+  if (exitCode !== 0) {
+    throw new Error(`ffprobe error: ${errorText}`);
+  }
+
+  const output = JSON.parse(outputText);
+  if (!output.streams || output.streams.length === 0) {
+    throw new Error("No video streams found");
+  }
+
+  const { width, height } = output.streams[0];
+
+  return width === Math.floor(16 * (height / 9))
+    ? "landscape"
+    : height === Math.floor(16 * (width / 9))
+      ? "portrait"
+      : "other";
+}
+
+export async function processVideoForFastStart(inputFilePath: string) {
+  const processedFilePath = `${inputFilePath}.processed.mp4`;
+
+  const process = Bun.spawn(
+    [
+      "ffmpeg",
+      "-i",
+      inputFilePath,
+      "-movflags",
+      "faststart",
+      "-map_metadata",
+      "0",
+      "-codec",
+      "copy",
+      "-f",
+      "mp4",
+      processedFilePath,
+    ],
+    { stderr: "pipe" },
+  );
+
+  const errorText = await new Response(process.stderr).text();
+  const exitCode = await process.exited;
+
+  if (exitCode !== 0) {
+    throw new Error(`FFmpeg error: ${errorText}`);
+  }
+
+  return processedFilePath;
 }
